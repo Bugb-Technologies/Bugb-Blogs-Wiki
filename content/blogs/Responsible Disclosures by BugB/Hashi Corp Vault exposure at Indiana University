@@ -1,0 +1,220 @@
+# The Hidden Key: How a Misconfigured Consul Exposed a Research Project's Secret Infrastructure
+
+*By Bugb Security Team, Bugb Technologies*
+
+---
+
+Sometimes the most dangerous vulnerabilities aren't created by hackers. They're created by defaults.
+
+Earlier last year, our team at **Bugb Technologies** stumbled upon one such default while running our global telemetry engine, **BSWARM**. What looked like just another Consul endpoint turned out to be the **vault to a research project's secrets, literally**.
+
+This is the story of how we found it, how we disclosed it responsibly, and what it taught us about automation, ethics, and collaboration.
+
+---
+
+## The Discovery: When Telemetry Whispers
+
+Our internet-scale telemetry network, **BSWARM**, continuously maps and validates exposed assets across the internet. One day, it picked up an anomaly tied to a research project hosted at **Indiana University**.
+
+Among dozens of routine endpoints, one stood out. A **HashiCorp Consul agent** was responding on **plain HTTP**, with **no authentication** and **no TLS encryption**.
+
+That small detail (a service talking too openly) was enough to raise alarms inside our system. When we sent a non-intrusive probe through **Cert-X-Gen**, our AI-driven validation engine, it responded with configuration data that confirmed our worst suspicion:
+
+The Consul instance wasn't just exposed. It was acting as the **backend storage for HashiCorp Vault**, a testing system associated with a now-defunct research project. While the vault was exposed, none of the information contained within was current or valid at the time of discovery. Additionally, the entire research project, including staff and systems, had moved away from IU, further limiting potential impact.
+
+It wasn't an open port. It was an open vault, albeit one containing outdated test data.
+
+---
+
+## Vulnerability Details
+
+Once validated, the incident was classified as **critical** under our responsible disclosure framework.
+
+| Field                     | Detail                                                                      |
+| :------------------------ | :-------------------------------------------------------------------------- |
+| **Vulnerability Title**   | Unauthenticated Consul exposing backend storage of a non-production HashiCorp Vault instance in a research project hosted at Indiana University |
+| **Service**               | HashiCorp Consul (serving as Vault storage backend)                         |
+| **Affected Domain**       | `custos14.sciencegateways.iu.edu`                                           |
+| **Port**                  | 8500 (HTTP)                                                                 |
+| **Endpoint**              | `/v1/agent/self`                                                            |
+| **CVSS v3.1 Base Score**  | **10.0 (CRITICAL)**                                                         |
+| **Impact Classification** | Complete Infrastructure Compromise                                          |
+
+This wasn't just a configuration mistake. It represented a **total breakdown of access control**, allowing any remote user to read, modify, or extract data from the testing Vault environment.
+
+---
+
+## What We Found
+
+Our verification revealed that the Consul cluster was deployed with **ACLs disabled** and its **default policy set to "allow."** That meant anyone could connect to the Consul API and pull Vault's backend data. No credentials required.
+
+Further analysis showed a **five-node Consul cluster** running inside a Kubernetes environment. Within it, we found:
+
+- **Vault Master and Unseal Keys**: full access to core secrets (`vault/core/master`, `vault/core/keyring`, `vault/core/shamir-kek`)
+- **Production SSH Keys**: multiple administrator keys, including one linked to an **@iu.edu** email account
+- **Academic Federation Credentials**: tokens for **CILogon** and **Custos**, confirming exposure of research infrastructure
+- **Cryptographic Material**: a 10-year root Certificate Authority (2021–2031) and JWT signing keys for internal APIs
+- **Evidence of Prior Activity**: an XSS payload (`<script>alert(document.domain)</script>`) suggesting earlier testing or attempted exploitation
+
+In short, the system was wide open, though importantly, the data within was part of a defunct testing environment and no longer current or valid.
+
+---
+
+## Responsible Disclosure
+
+We immediately drafted a detailed report titled:
+
+**"Unauthenticated Consul exposing backend storage of a non-production HashiCorp Vault instance in a research project hosted at Indiana University."**
+
+It was sent to **Indiana University's University Information Security Office (UISO)** on **July 4, 2025**, marked **CRITICAL: Immediate Action Required**.
+
+Within days, a staffer with the Indiana University Information Security Office acknowledged the disclosure, registered an internal case (**INC2604969**), and began mitigation following IU's **Coordinated Disclosure Policy**.
+
+There was no resistance. Just quick coordination, professionalism, and transparency.
+
+---
+
+## Disclosure Timeline
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          DISCLOSURE TIMELINE                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+    July 4, 2025
+    ┌─────────────────────────────────────────────────────────────┐
+    │ Initial Disclosure                                          │
+    │                                                             │
+    │ Bugb Technologies reports the vulnerability to a research   │
+    │ project hosted at Indiana University, including detailed    │
+    │ proof-of-concept and remediation steps.                     │
+    └─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+    July 7, 2025
+    ┌─────────────────────────────────────────────────────────────┐
+    │ Service Taken Offline                                       │
+    │                                                             │
+    │ Indiana University takes the exposed service offline.       │
+    └─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+    July 23, 2025
+    ┌─────────────────────────────────────────────────────────────┐
+    │ Acknowledgment & Case Registration                          │
+    │                                                             │
+    │ UISO confirms receipt and assigns the incident reference    │
+    │ INC2604969. The university acknowledges the issue's         │
+    │ severity and begins remediation.                            │
+    └─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+    July 24, 2025
+    ┌─────────────────────────────────────────────────────────────┐
+    │ Policy Coordination                                         │
+    │                                                             │
+    │ UISO shares Indiana University's Coordinated Disclosure     │
+    │ Policy, requesting a 90-day remediation window before any   │
+    │ public mention. Bugb agrees and commits to full cooperation.│
+    └─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+    July 28, 2025
+    ┌─────────────────────────────────────────────────────────────┐
+    │ Disclosure Alignment                                        │
+    │                                                             │
+    │ Bugb reconfirms willingness to wait for IU's advisory       │
+    │ publication and offers to co-publish a technical write-up   │
+    │ once remediation is complete.                               │
+    └─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+    September 30, 2025
+    ┌─────────────────────────────────────────────────────────────┐
+    │ Remediation Validation                                      │
+    │                                                             │
+    │ BSWARM confirms the affected endpoints are offline and the  │
+    │ Consul cluster rebuilt with ACLs and TLS enforcement.       │
+    └─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+    October 2, 2025
+    ┌─────────────────────────────────────────────────────────────┐
+    │ Final Coordination                                          │
+    │                                                             │
+    │ IU's Deputy CISO requests an additional 30-day hold before  │
+    │ publication so their official statement can go live first.  │
+    │ Bugb agrees and shares a pre-release draft and an           │
+    │ educational demonstration video for review.                 │
+    └─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Containment and Remediation
+
+### Immediate Actions Executed
+
+1. Blocked all external access to port 8500
+2. Isolated the Consul cluster from public networks
+3. Rotated all secrets, SSH keys, and API tokens
+
+### Remediation Steps Implemented
+
+- Enabled ACLs with strict default-deny policies
+- Enforced TLS for all Consul communications
+- Restricted management API exposure to internal networks
+- Rebuilt Vault with new keys and configurations
+
+By late September, follow-up telemetry confirmed the system was secured and operational with hardened settings.
+
+---
+
+## Official Statement from Indiana University
+
+Tim Goth, Deputy Chief Information Security Officer at Indiana University, provided the following statement:
+
+> On July 4th, 2025, Indiana University received an external report of a potentially exposed Hashi Corp Vault instance. IU subsequently investigated and confirmed the report. The investigation determined that while this vault was accessible to the Internet, it was a non-production instance that contained no active or valid secrets. The system providing this service has since been retired. Responsible disclosure of vulnerabilities is a critical tool in securing Internet connected systems and we remain committed to working collaboratively with security researchers as they provide timely and constructive reports, such as this one. IU would like to thank Shahid Hakim (shahid@bugb.io) from Bugb Technologies for their efforts to identify this vulnerability and report it to us.
+
+---
+
+## Lessons Learned: The Default-Deny Mindset
+
+This case reminded us that some of the most severe vulnerabilities don't arise from clever exploitation. They stem from **assumptions**.
+
+Consul trusted too much by default. Vault protected everything by design. Together, without guardrails, they formed a vault without a lock.
+
+The underlying causes were simple yet powerful:
+
+- Insecure default configurations
+- Lack of network segmentation
+- Missing security review on backend service integrations
+
+The fix was equally simple, but required awareness:
+
+**Always start with deny, then allow.**
+
+---
+
+## Proof Beats Posture
+
+At Bugb, we call this philosophy **vibe-security**: a mindset where our AI agents don't guess risk. They **prove it**. Our goal isn't to point fingers but to validate what's real, measurable, and actionable.
+
+This incident reinforced that belief. It showed that continuous, evidence-based validation can uncover blind spots that static scanners miss, and that responsible disclosure, when done right, strengthens trust instead of breaking it.
+
+Indiana University's team handled the incident with humility and professionalism, turning a potential crisis into a model example of collaboration between researchers and defenders.
+
+---
+
+## Final Reflection
+
+Once remediation was complete, IU's team asked for a short delay before public release, a request we fully respected. We later shared this case study, along with a short educational video demonstrating how our framework safely identified the issue without exposing any sensitive data.
+
+Security isn't about finding flaws. It's about building trust through truth.
+
+**Stay vigilant. Stay ahead.**
+
+---
+
+*Bugb Reports*  
+*Bugb Security Team*
