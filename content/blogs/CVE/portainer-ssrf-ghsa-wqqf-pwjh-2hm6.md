@@ -29,13 +29,82 @@ Every one of those features passed the user's URL through the same helper, `IsUR
 
 When one helper guards every outbound fetch and that helper only checks the *form* of the address, every feature built on it inherits the same SSRF.
 
-## How Bravos found it
+## How Bravos handled the whole thing — one prompt, no setup
 
-1. **GuardLink** read the code and followed each user-supplied URL to where the server dials it. It marked the Git preview, the Helm template fetch, the registry ping, and the OAuth path — and traced them all back to `IsURL`.
-2. **CodeGraph** ranked these server-side-fetch routes high, because they reach the network from the server's position.
-3. **Cert-X-Gen** proved it on a running copy, as a standard user, by pointing the fetch at an address only the server could reach and watching the server's response leak what happened.
+We did not start by poking the API by hand, and we did not build a lab first. We pointed Bravos at the Portainer 2.39.2 source and let it run the whole thing. Here is the actual sequence.
 
-Crucially, Bravos reports SSRF only when the running server actually makes the request — not because the code "looks like" SSRF. Here is the confirmation it recorded.
+**1. Clone the code.** Portainer Community Edition 2.39.2, and nothing else — no running server, no test accounts, no environment of our own.
+
+```bash
+git clone --branch 2.39.2 https://github.com/portainer/portainer
+```
+
+**2. `bravos init` — point Bravos at the repository.** One command sets the repo up: GuardLink, the scope, the agent instructions, and a code graph of the whole project.
+
+```bash
+bravos init portainer
+```
+
+**3. Open the dashboard — or just talk to Bravos from your AI assistant over MCP.**
+
+```bash
+bravos dashboard          # opens http://localhost:8787
+# or
+bravos mcp                # serves Bravos's tools to your AI assistant over MCP
+```
+
+This run started from the MCP path: a single plain-language prompt, nothing set up by hand.
+
+**4. Ask for what you want, in plain words.** We described the goal; Bravos turned it into a reviewable plan.
+
+```bash
+bravos intake "pentest Portainer as a standard, non-admin user; prove anything that reaches the host or an internal service"
+```
+
+**5. Read the plan and approve it.**
+
+```bash
+bravos intake --approve <plan-id>
+```
+
+**6. Bravos ran the whole loop — and built the environment itself.** We never stood up Portainer or created users. Bravos authored a disposable-environment recipe, brought it up, created the test accounts at each role, and ran.
+
+```bash
+bravos auto --plan <plan-id> --init-env
+```
+
+Under that one command, Bravos orchestrated three specialists in order:
+
+```mermaid
+flowchart LR
+  P["Your prompt"] --> B(("Bravos"))
+  B --> E["Disposable test env<br/>(Bravos builds it)"]
+  B --> G["GuardLink<br/>threat model in the code"]
+  G --> C["CodeGraph<br/>rank by what each path reaches"]
+  E --> X["Cert-X-Gen<br/>prove it on the running app"]
+  C --> X
+  X --> L["Ledger: confirmed / refuted / unproven"]
+```
+
+**GuardLink** read all 4,606 files and wrote the threat model into the repository — 881 annotations — in minutes. That is what changes the economics of a review: instead of a person spending days learning Portainer, we had a complete map of where untrusted input reaches something dangerous, across the whole codebase, almost immediately. We understood the threats the project could plausibly hold before sending a single request — and one annotation is the whole story here: every feature that fetches a user-supplied URL passes through one helper, `IsURL`, which only checks the *form* of an address and never where it leads.
+
+**CodeGraph** ranked the server-side-fetch routes high, because they reach the network from the server's own position.
+
+After that, all that was left was **proof**. A map tells you where to look; it does not tell you the server will actually make the request. So **Cert-X-Gen** pointed each fetch at an address only the server could reach and watched the server's own response reveal what happened — confirmed, not guessed.
+
+```mermaid
+flowchart LR
+  U["Standard user"] -->|"repo = http://127.0.0.1:7777"| F["URL feature (Git / Helm / registry)"]
+  F -->|"IsURL: form only, no destination check"| S["Portainer server"]
+  S -->|"dials the internal address"| I[("Internal services / cloud metadata")]
+  S -->|"error text leaks the result"| U
+```
+
+**7. Read the results.** Bravos wrote the threat model (`threat-model.md`), the machine-readable model (`.guardlink/report.json`), and a ledger of every goal with its verdict. This SSRF is one of the ones that came back **confirmed**, because the running server demonstrated it.
+
+The headline is the orchestration. We mapped Portainer's entire threat model in minutes with Bravos and GuardLink, understood the threats the codebase could plausibly hold, and then needed only proof — which Bravos and Cert-X-Gen produced on a live copy. **Bravos orchestrated all of it**: the environment, the model, the ranking, the probes, and the evidence. We supplied one prompt.
+
+If you would rather watch the raw exchange, the same finding reproduced by hand looks like this.
 
 ## Reproduce it, command by command
 
